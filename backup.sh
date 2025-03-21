@@ -1,28 +1,61 @@
 #!/bin/bash
 
-# Налаштування
-LOCAL_DIR="/home/vagrant/data"  # Локальна папка для бекапу
-REMOTE_USER="vagrant"           # Користувач на сервері
-REMOTE_HOST="192.168.56.11"     # IP-адреса сервера
-REMOTE_DIR="/home/vagrant/backup"  # Дистанційна папка для збереження бекапу
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S") # Поточна дата й час
-BACKUP_FILE="backup_${TIMESTAMP}.tar.gz"  # Ім'я архіву
-LOCAL_BACKUP_PATH="/tmp/$BACKUP_FILE"  # Де тимчасово зберігати архів
+# Налаштування змінних
+SOURCE_DIR="/home/vagrant/data"  # Директорія для резервного копіювання
+BACKUP_DIR="/home/vagrant/backup" # Локальна папка для архівів
+REMOTE_USER="vagrant"
+REMOTE_HOST="192.168.56.11"
+REMOTE_BACKUP_DIR="/home/vagrant/backup"
+LOG_FILE="/var/log/backup.log"
+DATE=$(date +"%Y%m%d_%H%M%S")
+ARCHIVE_NAME="backup_${DATE}.tar.gz"
+ARCHIVE_PATH="${BACKUP_DIR}/${ARCHIVE_NAME}"
+
+# Функція логування
+log_message() {
+    echo "$(date +"%Y-%m-%d %H:%M:%S") - $1" | tee -a "$LOG_FILE"
+}
+
+# Перевірка доступності сервера
+ping -c 3 "$REMOTE_HOST" > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    log_message "❌ Помилка: Сервер $REMOTE_HOST недоступний."
+    exit 1
+fi
+
+log_message "🔄 Резервне копіювання розпочато."
+
+# Перевірка існування локального каталогу резервних копій
+if [ ! -d "$BACKUP_DIR" ]; then
+    mkdir -p "$BACKUP_DIR"
+    log_message "📁 Створено локальний каталог резервних копій: $BACKUP_DIR"
+fi
 
 # Створення архіву
-echo "📦 Архівуємо $LOCAL_DIR у $LOCAL_BACKUP_PATH..."
-tar -czf "$LOCAL_BACKUP_PATH" -C "$LOCAL_DIR" .
+tar -czf "$ARCHIVE_PATH" -C "$SOURCE_DIR" .
+if [ $? -eq 0 ]; then
+    log_message "✅ Архів створено: $ARCHIVE_PATH"
+else
+    log_message "❌ Помилка: Не вдалося створити архів."
+    exit 1
+fi
 
-# Перевіряємо, чи існує папка backup на сервері, і створюємо її, якщо потрібно
-echo "📂 Перевіряємо, чи існує папка backup на сервері..."
-ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p $REMOTE_DIR"
+# Перевірка існування каталогу backup на сервері
+ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p $REMOTE_BACKUP_DIR"
 
-# Передача архіву на сервер через SCP
-echo "📤 Передаємо архів $BACKUP_FILE на $REMOTE_HOST..."
-scp "$LOCAL_BACKUP_PATH" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+# Передача архіву на сервер
+scp "$ARCHIVE_PATH" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BACKUP_DIR/"
+if [ $? -eq 0 ]; then
+    log_message "🚀 Архів передано на сервер $REMOTE_HOST у $REMOTE_BACKUP_DIR"
+else
+    log_message "❌ Помилка: Не вдалося передати архів."
+    exit 1
+fi
 
-# Видаляємо локальний тимчасовий архів
-rm "$LOCAL_BACKUP_PATH"
+# Видалення старих резервних копій (залишаємо лише 3 останні)
+ssh "$REMOTE_USER@$REMOTE_HOST" "cd $REMOTE_BACKUP_DIR && ls -t | tail -n +4 | xargs rm -f"
+log_message "🗑️ Старі резервні копії очищено."
 
-echo "✅ Резервне копіювання завершено!"
+log_message "🎉 Резервне копіювання завершено успішно."
+exit 0
 
